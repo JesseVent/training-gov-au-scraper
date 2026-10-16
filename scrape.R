@@ -4,7 +4,7 @@
 # In RStudio: setwd() to this folder, edit the config below, then source().
 
 # ---- Config ----
-MAX_QUALIFICATIONS  <- 20   # how many to scrape, in code order; Inf = all (~1,153)
+MAX_QUALIFICATIONS  <- Inf  # how many to scrape, in code order; Inf = all (~1,153)
 REQUESTS_PER_SECOND <- 2    # rate limit across all requests
 MAX_RETRIES         <- 4    # retries on 429/5xx/network errors (honours Retry-After)
 
@@ -78,9 +78,11 @@ save_record <- function(rec) {
 
 squish <- function(x) trimws(gsub("[\\s ]+", " ", x, perl = TRUE))
 
-# Lines of text outside tables, plus every <ntr-tcref> tagged with its group: the last
-# heading-shaped line outside a table (no refs, short, no closing punctuation). Headings are
-# <strong> in some packages, a CSS class or plain <p> in others, so markup can't be trusted.
+# Rules prose as lines, plus every <ntr-tcref> tagged with its group: the last heading-shaped line
+# (no refs, short, no closing punctuation). Markup varies by package, so it isn't trusted:
+# - units sit in table rows (CHC, ACM), or one per <p>/<li> as "CODE Title" (BSB, CUA, AUR)
+# - headings are <strong>, a CSS class, a plain <p>, or a table row of their own (UEE, TLI, DEF)
+# - some packages put the whole rules prose inside a table cell
 parse_rules <- function(bundle) {
   items <- Filter(\(i) identical(i$contentType, "PackagingRules"), bundle$items)
   if (!length(items)) return(list(rules_text = NULL, units = list()))
@@ -88,19 +90,56 @@ parse_rules <- function(bundle) {
   st$lines <- character()
   st$units <- list()
   st$group <- NA_character_
-  st$table <- 0
   st$buf <- character()
-  st$has_ref <- FALSE
+  st$refs <- list()   # refs on the current line
+  st$row <- NULL      # lines of the current table row, judged together when the row ends
+  st$tr_depth <- 0
+  st$cell <- 0        # td/th counter, so a row's lines know which cell they came from
+
+  add_refs <- function(refs, group) for (r in refs) st$units[[length(st$units) + 1]] <- c(list(group = group), r)
+  # A line that opens with a code lists a member of the current group. Outside tables only units count
+  # (BSB's testamur list opens with the qualification code). nrt_type is "unit" or "unitOfCompetency".
+  is_listing <- \(l, type = "unit") length(l$refs) > 0 &&
+    isTRUE(startsWith(l$refs[[1]]$nrt_type, type) && startsWith(l$text, l$refs[[1]]$code))
+  # ponytail: shape heuristic; notes and rule bullets end in punctuation. Check the group list on new packages.
+  # A bare "or"/"plus" between unit rows joins alternatives; it doesn't start a group.
+  is_heading <- \(l) !length(l$refs) && nchar(l$text) <= 120 && !grepl("[.:;]$", l$text) &&
+    !grepl("^(or|and|plus|either)$", l$text, ignore.case = TRUE)
+  # refs in prose are mentions, not group members
+  prose <- function(l) {
+    st$lines <- c(st$lines, l$text)
+    add_refs(l$refs, IN_TEXT)
+  }
+
+  take_line <- function(l) {
+    if (is_listing(l)) return(add_refs(l$refs, st$group))
+    prose(l)
+    if (is_heading(l)) st$group <- l$text
+  }
+
+  take_row <- function(row) {
+    if (!length(row)) return()
+    if (any(vapply(row, is_listing, logical(1), type = ""))) {
+      for (l in row) add_refs(l$refs, st$group)
+      return()
+    }
+    # column labels ("Unit code | Unit title") are neither prose nor a group
+    if (length(row) > 1 && grepl("^unit\\b", row[[1]]$text, ignore.case = TRUE)) return()
+    for (l in row) prose(l)
+    # The group is named in the first cell, not beside it ("Core units. | Weighting Points"): its last
+    # heading-shaped line, allowing a stray full stop when the cell is a single line.
+    cell <- Filter(\(l) l$cell == row[[1]]$cell, row)
+    if (length(cell) == 1) cell[[1]]$text <- sub("\\.$", "", cell[[1]]$text)
+    heads <- Filter(is_heading, cell)
+    if (length(heads)) st$group <- heads[[length(heads)]]$text
+  }
 
   flush <- function() {
-    text <- squish(paste(st$buf, collapse = ""))
-    if (nzchar(text) && st$table == 0) {
-      st$lines <- c(st$lines, text)
-      # ponytail: shape heuristic; notes and rule bullets end in punctuation. Check the group list on new packages.
-      if (!st$has_ref && nchar(text) <= 120 && !grepl("[.:;]$", text)) st$group <- text
-    }
+    l <- list(text = squish(paste(st$buf, collapse = "")), refs = st$refs, cell = st$cell)
     st$buf <- character()
-    st$has_ref <- FALSE
+    st$refs <- list()
+    if (!nzchar(l$text)) return()
+    if (is.null(st$row)) take_line(l) else st$row[[length(st$row) + 1]] <- l
   }
 
   walk <- function(node) {
@@ -113,11 +152,13 @@ parse_rules <- function(bundle) {
       if (type != "element") next
       tag <- xml_name(child)
       if (tag %in% BLOCKS) flush()
-      if (tag == "table") st$table <- st$table + 1
+      if (tag == "tr") {
+        if (st$tr_depth == 0) st$row <- list()
+        st$tr_depth <- st$tr_depth + 1
+      }
+      if (tag %in% c("td", "th")) st$cell <- st$cell + 1
       if (tag == "ntr-tcref") {
-        st$has_ref <- TRUE
-        st$units[[length(st$units) + 1]] <- list(
-          group = if (st$table > 0) st$group else IN_TEXT,
+        st$refs[[length(st$refs) + 1]] <- list(
           code = xml_attr(child, "data-nrt-code"),
           title = squish(xml_attr(child, "data-nrt-title")),
           nrt_type = xml_attr(child, "data-nrt-type")
@@ -125,7 +166,14 @@ parse_rules <- function(bundle) {
       }
       walk(child)
       if (tag %in% BLOCKS) flush()
-      if (tag == "table") st$table <- st$table - 1
+      if (tag == "tr") {
+        st$tr_depth <- st$tr_depth - 1
+        if (st$tr_depth == 0) {
+          row <- st$row
+          st$row <- NULL
+          take_row(row)
+        }
+      }
     }
   }
 
@@ -140,6 +188,7 @@ write_outputs <- function() {
   dir.create(OUT_DIR, showWarnings = FALSE)
   jsonl <- character()
   rows <- list()
+  rules <- list()
   flagged <- character()
   for (f in sort(list.files(RAW_DIR, pattern = "\\.json$", full.names = TRUE))) {
     rec <- fromJSON(f, simplifyVector = FALSE)
@@ -151,6 +200,10 @@ write_outputs <- function() {
            rules_text = parsed$rules_text, units = parsed$units),
       auto_unbox = TRUE, null = "null", na = "null"
     ))
+    rules[[length(rules) + 1]] <- data.frame(
+      qual_code = rec$code, qual_title = rec$title, release = rec$release,
+      rules_text = parsed$rules_text %||% NA_character_
+    )
     if (length(parsed$units)) {
       rows[[length(rows) + 1]] <- data.frame(
         qual_code = rec$code, qual_title = rec$title, release = rec$release, group = groups,
@@ -160,9 +213,10 @@ write_outputs <- function() {
     }
   }
   writeLines(jsonl, file.path(OUT_DIR, "qualifications.jsonl"), useBytes = TRUE)
+  write.csv(do.call(rbind, rules), file.path(OUT_DIR, "packaging_rules.csv"), row.names = FALSE, na = "", fileEncoding = "UTF-8")
   write.csv(do.call(rbind, rows), file.path(OUT_DIR, "units.csv"), row.names = FALSE, na = "", fileEncoding = "UTF-8")
   message(sprintf("wrote %d qualifications to %s/", length(jsonl), OUT_DIR),
-          if (length(flagged)) paste0("; no units in tables (check by hand): ", paste(flagged, collapse = ", ")))
+          if (length(flagged)) paste0("; no listed units (check by hand): ", paste(flagged, collapse = ", ")))
 }
 
 selftest <- function() {
@@ -177,6 +231,28 @@ selftest <- function() {
     identical(codes_in("Group C electives – HOME AND COMMUNITY specialisation (4 units)"),
               c("CHCAGE001", "CHCDIS007", "CHCCCS011", "CHCCCS025", "CHCHCS001")),
     all(pluck_chr(p$units, "nrt_type") == "unit")
+  )
+  # BSB-style layout: units one per <p> under a heading paragraph, plus a ref in prose
+  ref <- \(code) sprintf('<ntr-tcref data-nrt-code="%s" data-nrt-title="t" data-nrt-type="unit">%s</ntr-tcref>', code, code)
+  b <- parse_rules(list(items = list(list(contentType = "PackagingRules", content = paste0(
+    "<div><p><strong>Core units</strong></p><p>", ref("BSBCRT511"), " Develop critical thinking</p>",
+    "<p>Up to 2 units, e.g. ", ref("BSBFIN501"), ", may come from any package.</p></div>"
+  )))))
+  stopifnot(
+    identical(pluck_chr(b$units, "group"), c("Core units", IN_TEXT)),
+    !grepl("BSBCRT511", b$rules_text), grepl("BSBFIN501", b$rules_text)
+  )
+  # UEE-style layout: prose, headings and column labels all in rows of one table
+  u <- parse_rules(list(items = list(list(contentType = "PackagingRules", content = paste0(
+    "<table><tr><td><p>A total of 180 weighting points:</p><p>120 core points</p></td></tr>",
+    "<tr><th>Core units</th><td>Weighting Points</td></tr>",
+    "<tr><td>Unit code</td><td>Unit title</td></tr>",
+    "<tr><td><p>", ref("UEECD0007"), "</p></td><td><p>Apply WHS regulations</p></td><td>20</td></tr></table>"
+  )))))
+  stopifnot(
+    identical(pluck_chr(u$units, "group"), "Core units"),
+    startsWith(u$rules_text, "A total of 180 weighting points:\n120 core points"),
+    !grepl("Unit code|Apply WHS", u$rules_text)
   )
   message(sprintf("selftest ok: %d unit refs, %d groups", length(p$units), length(unique(pluck_chr(p$units, "group")))))
 }
