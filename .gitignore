@@ -1,0 +1,9 @@
+raw/
+*.tmp
+.Rhistory
+.RData
+.Rproj.user/
+.DS_Store
+# sample output is published on purpose; overrides the global *.csv / *.jsonl ignores
+!out/*.csv
+!out/*.jsonl
