@@ -51,7 +51,7 @@ source side (the rules page and the grid disagree).
 ## Skill-group classification
 
 `classify.R` asks OpenAI Decisions (`gpt-6-luna`) to pick a skill group for every course in
-`Course_List.csv`, from the file's own 29 `skill_area_group` values. Each choice's description lists
+`data/Course_List.csv`, from the file's own 29 `skill_area_group` values. Each choice's description lists
 that group's sub-areas. It runs twice:
 - `blind`: course name, training package and occupations;
 - `subarea`: the same plus `skill_area_description`.
@@ -74,7 +74,7 @@ qualification that superseded them, found by following `mappingInformation` on `
 how many supersessions away (0 = the course's own), and `overview_reason` why there's none.
 
 Each course is also matched to the occupation it mainly trains for on Jobs and Skills Australia's 2026
-Occupation Shortage List (`2026_occupation_shortage_list_-_6_digit_anzsco_and_osca.xlsx`, downloaded by
+Occupation Shortage List (`data/2026_occupation_shortage_list_-_6_digit_anzsco_and_osca.xlsx`, downloaded by
 hand from [jobsandskills.gov.au](https://www.jobsandskills.gov.au/data/occupation-shortage); the site
 rejects scripted requests), once in ANZSCO 2022 and once in OSCA 2024. Decisions takes at most 255
 choices, so it picks the 2-digit occupation group first, then the occupation among the two likeliest
