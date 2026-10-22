@@ -25,8 +25,8 @@ suppressPackageStartupMessages({
   library(readxl)
 })
 
-COURSES <- "Course_List.csv"
-OSL_FILE <- "2026_occupation_shortage_list_-_6_digit_anzsco_and_osca.xlsx"  # jobsandskills.gov.au/data/occupation-shortage
+COURSES <- file.path("data", "Course_List.csv")
+OSL_FILE <- file.path("data", "2026_occupation_shortage_list_-_6_digit_anzsco_and_osca.xlsx")  # jobsandskills.gov.au/data/occupation-shortage
 OSL_SHEETS <- c(anzsco = "2026 OSL (ANZSCO 2022)", osca = "2026 OSL (OSCA 2024)")
 RATINGS <- c(S = "Shortage", NS = "No shortage", R = "Regional shortage", M = "Metro shortage")
 SCRAPE_DIR <- "raw"
