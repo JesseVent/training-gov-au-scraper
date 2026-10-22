@@ -48,4 +48,40 @@ register and available only through ANZPAA. On a 31-qualification sample, core u
 training.gov.au's unit grid 31/31 and full unit sets 28/31; the 3 differences are inconsistencies on the
 source side (the rules page and the grid disagree).
 
+## Skill-group classification
+
+`classify.R` asks OpenAI Decisions (`gpt-6-luna`) to pick a skill group for every course in
+`Course_List.csv`, from the file's own 29 `skill_area_group` values. Each choice's description lists
+that group's sub-areas. It runs twice:
+- `blind`: course name, training package and occupations;
+- `subarea`: the same plus `skill_area_description`.
+
+```bash
+OPENAI_API_KEY=... Rscript classify.R            # both runs, all courses
+Rscript classify.R --limit 5                     # smoke run on the first 5 courses
+Rscript classify.R --selftest                    # parser check against fixtures/decisions_response.json
+```
+
+Paid: about 1,050 input tokens per call at $0.10/M, so about $0.50 for both runs (4,842 calls).
+Responses are cached in `raw/decisions/{run}/{CODE}.json`, so a rerun only calls what's missing.
+`out/course_skill_groups.csv` is the input columns plus, per run, `_group`, `_probability`,
+`_confidence`, `_reason` (why there's no answer) and `_agrees` (matches `skill_area_group`).
+
+It also carries each course's `description` and `packaging_rules` from the scrape (run `scrape.R` first).
+Superseded courses have no content of their own on training.gov.au, so they take the text of the current
+qualification that superseded them, found by following `mappingInformation` on `/api/training/{code}`
+(free, 2 requests/s, cached in `raw/lineage/`). `overview_code` says whose text it is, `overview_hops`
+how many supersessions away (0 = the course's own), and `overview_reason` why there's none.
+
+Each course is also matched to the occupation it mainly trains for on Jobs and Skills Australia's 2026
+Occupation Shortage List (`2026_occupation_shortage_list_-_6_digit_anzsco_and_osca.xlsx`, downloaded by
+hand from [jobsandskills.gov.au](https://www.jobsandskills.gov.au/data/occupation-shortage); the site
+rejects scripted requests), once in ANZSCO 2022 and once in OSCA 2024. Decisions takes at most 255
+choices, so it picks the 2-digit occupation group first, then the occupation among the two likeliest
+groups' occupations. The model sees course name, package, occupations, skill area and the first 1,000
+characters of the description. About 6,000 input tokens per course per code set, so about $2.90 for both.
+Columns per set (`anzsco_`, `osca_`): `code`, `title`, `probability` (of the occupation among the
+candidates), `rating` (2026 national rating: Shortage, No shortage, Regional shortage, Metro shortage),
+`rating_confidence` (Clear or On-balance), `reason`.
+
 Data © Commonwealth of Australia, sourced from [training.gov.au](https://training.gov.au).
