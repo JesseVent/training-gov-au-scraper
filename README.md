@@ -84,4 +84,36 @@ Columns per set (`anzsco_`, `osca_`): `code`, `title`, `probability` (of the occ
 candidates), `rating` (2026 national rating: Shortage, No shortage, Regional shortage, Metro shortage),
 `rating_confidence` (Clear or On-balance), `reason`.
 
+## Jobs and Skills Australia data files
+
+`scrape_jobsandskills.R` downloads every file linked under
+[jobsandskills.gov.au/data](https://www.jobsandskills.gov.au/data) (PDF, XLSX, DOCX, ZIP, ...) in its original
+format. Settings (`MAX_PAGES`, `REQUESTS_PER_SECOND <- 1`, `MAX_RETRIES <- 4`) are at the top.
+
+```bash
+Rscript scrape_jobsandskills.R --selftest   # robots, page parse, file checks and re-run logic, offline
+Rscript scrape_jobsandskills.R              # crawl and download
+```
+
+- It reads robots.txt first. An unreachable robots.txt counts as complete disallow (RFC 9309), so the run stops.
+- It crawls `/data` and every `/data/...` page linked from a page's `<main>`, breadth-first, keeping `?page=`
+  pager links. Datasets the landing page links outside `/data` (`/studies/...`, `/research/studies/...`,
+  the Atlas) and files hosted on other sites are listed as skipped, not fetched.
+- Files go to `data/jobsandskills/files/{YYYY-MM}/{filename}`, mirroring the site's upload folder (git-ignored).
+  Each file is checked after download: CSVs load, XLSX sheets open, ZIP/DOCX pass `unzip -t`, PDFs have a
+  header and an `%%EOF`.
+- `data/jobsandskills/manifest.csv` has one row per downloaded file: `dataset_title` (the page's h1),
+  `file_label`, `page_url`, `file_url`, `uploaded` (the YYYY-MM folder), `last_modified` and `etag` (HTTP
+  headers), `stated_bytes` (the page's figure) and `bytes`, `md5`, `local_path`, `downloaded_at`, `check`. The
+  pages show no per-file publish date, only future release calendars.
+- Re-runs send `If-None-Match`/`If-Modified-Since` for files already on disk and skip anything unchanged. Files
+  keep the same path, so nothing is duplicated.
+- Failed pages and files are logged and the run carries on. The summary lists every failure, skip, invalid
+  file and size mismatch, and the script exits 1 if anything failed.
+
+**It doesn't currently get through.** jobsandskills.gov.au's firewall resets every request that doesn't look
+exactly like Chrome. That includes this script's identifying User-Agent, and robots.txt itself (HTTP/2
+`INTERNAL_ERROR`, 2026-10-23). So a run stops at robots.txt and collects nothing. It needs JSA to allowlist
+the User-Agent, or an explicit decision to present as a browser.
+
 Data © Commonwealth of Australia, sourced from [training.gov.au](https://training.gov.au).
