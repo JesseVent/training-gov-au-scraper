@@ -7,3 +7,4 @@ raw/
 # sample output is published on purpose; overrides the global *.csv / *.jsonl ignores
 !out/*.csv
 !out/*.jsonl
+data/jobsandskills/files/
